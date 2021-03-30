@@ -78,3 +78,9 @@ cfg_not_os_poll! {
         pub use self::unix::uds::SocketAddr;
     }
 }
+
+#[cfg(target_os = "wasi")]
+cfg_os_poll! {
+    mod wasm;
+    pub use self::wasm::*;
+}
