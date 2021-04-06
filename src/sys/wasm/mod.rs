@@ -27,7 +27,7 @@ cfg_os_poll! {
 
         impl Selector {
             pub(crate) fn new() -> io::Result<Self> {
-                todo!("`Selector::new`");
+                Ok(Self)
             }
 
             pub(crate) fn register(&self, _fd: RawFd, _token: Token, _interests: Interest) -> io::Result<()> {
