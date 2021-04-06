@@ -123,6 +123,9 @@ cfg_os_poll! {
             use std::os::wasi::io::{AsRawFd, RawFd};
             use std::time::Duration;
 
+            pub use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, Shutdown, SocketAddrV4, SocketAddrV6};
+            pub use wasio::sys::socket_create;
+
             #[derive(Debug)]
             #[allow(unused)]
             pub struct Incoming<'a> {
@@ -294,21 +297,28 @@ cfg_os_poll! {
                     todo!("`TcpStream::as_raw_fd`");
                 }
             }
-
-            pub use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, Shutdown, SocketAddrV4, SocketAddrV6};
         }
 
         pub(crate) mod tcp {
             use crate::net::TcpKeepalive;
+            use crate::sys::net::socket_create;
             use std::io;
             use std::net::SocketAddr;
             use std::time::Duration;
+            use wasio::types::{__wasi_fd_t, AF_INET, SOCK_STREAM};
 
             pub use crate::sys::net::{TcpListener, TcpStream};
-            pub type TcpSocket = usize;
+            pub type TcpSocket = __wasi_fd_t;
 
             pub fn new_v4_socket() -> io::Result<TcpSocket> {
-                todo!("`tcp::new_v4_socket`");
+                let mut fd: __wasi_fd_t = 0;
+                let err = unsafe { socket_create(&mut fd, AF_INET, SOCK_STREAM, 0) };
+
+                if err != 0 {
+                    return Err(io::Error::new(io::ErrorKind::Other, format!("`tcp::socket_create` failed with `{}`", err)));
+                }
+
+                Ok(fd)
             }
 
             pub fn new_v6_socket() -> io::Result<TcpSocket> {
