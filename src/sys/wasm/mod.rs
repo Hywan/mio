@@ -42,6 +42,7 @@ cfg_os_poll! {
                 todo!("`Selector::deregister`");
             }
 
+            #[allow(unused)]
             pub(crate) fn id(&self) -> usize {
                 todo!("`Selector::id`");
             }
