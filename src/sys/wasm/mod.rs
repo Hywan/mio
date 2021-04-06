@@ -305,7 +305,7 @@ cfg_os_poll! {
             use std::io;
             use std::net::SocketAddr;
             use std::time::Duration;
-            use wasio::types::{__wasi_fd_t, AF_INET, SOCK_STREAM};
+            use wasio::types::{__wasi_fd_t, AF_INET, AF_INET6, SOCK_STREAM};
 
             pub use crate::sys::net::{TcpListener, TcpStream};
             pub type TcpSocket = __wasi_fd_t;
@@ -322,7 +322,14 @@ cfg_os_poll! {
             }
 
             pub fn new_v6_socket() -> io::Result<TcpSocket> {
-                todo!("`tcp::new_v6_socket`");
+                let mut fd: __wasi_fd_t = 0;
+                let err = unsafe { socket_create(&mut fd, AF_INET6, SOCK_STREAM, 0) };
+
+                if err != 0 {
+                    return Err(io::Error::new(io::ErrorKind::Other, format!("`tcp::socket_create` failed with `{}`", err)));
+                }
+
+                Ok(fd)
             }
 
             pub fn bind(_socket: TcpSocket, _addr: SocketAddr) -> io::Result<()> {
