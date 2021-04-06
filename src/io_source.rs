@@ -104,6 +104,7 @@ impl<T> IoSource<T> {
     /// [`deregister`] it.
     ///
     /// [`deregister`]: Registry::deregister
+    #[cfg(any(unix, windows))]
     pub fn into_inner(self) -> T {
         self.inner
     }
