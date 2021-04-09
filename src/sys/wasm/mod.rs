@@ -190,7 +190,7 @@ cfg_os_poll! {
 
             impl AsRawFd for TcpListener {
                 fn as_raw_fd(&self) -> RawFd {
-                    todo!("`TcpListener::as_raw_fd`");
+                    self.socket.into()
                 }
             }
 
