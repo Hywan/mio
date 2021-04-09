@@ -349,7 +349,8 @@ cfg_os_poll! {
             }
 
             pub fn set_reuseaddr(_socket: TcpSocket, _reuseaddr: bool) -> io::Result<()> {
-                todo!("`tcp::set_reuseaddr`");
+                dbg!("`tcp::set_reuseaddr`");
+                Ok(())
             }
 
             pub fn get_reuseaddr(_socket: TcpSocket) -> io::Result<bool> {
