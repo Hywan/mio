@@ -118,6 +118,7 @@ cfg_os_poll! {
 
     cfg_net! {
         pub(crate) mod net {
+            use crate::sys::tcp::TcpSocket;
             use std::io;
             use std::net::ToSocketAddrs;
             use std::os::wasi::io::{AsRawFd, RawFd};
@@ -141,9 +142,15 @@ cfg_os_poll! {
             }
 
             #[derive(Debug)]
-            pub struct TcpListener;
+            pub struct TcpListener {
+                socket: TcpSocket,
+            }
 
             impl TcpListener {
+                pub(in crate::sys) fn new(socket: TcpSocket) -> Self {
+                    Self { socket }
+                }
+
                 pub fn bind<A: ToSocketAddrs>(_addr: A) -> io::Result<Self> {
                     todo!("`TcpListener::bind`");
                 }
