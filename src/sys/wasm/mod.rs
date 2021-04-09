@@ -124,7 +124,7 @@ cfg_os_poll! {
             use std::time::Duration;
 
             pub use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, Shutdown, SocketAddrV4, SocketAddrV6};
-            pub use wasio::sys::socket_create;
+            pub use wasio::sys::{socket_create, socket_bind};
 
             #[derive(Debug)]
             #[allow(unused)]
@@ -301,11 +301,11 @@ cfg_os_poll! {
 
         pub(crate) mod tcp {
             use crate::net::TcpKeepalive;
-            use crate::sys::net::socket_create;
+            use crate::sys::net::{socket_create, socket_bind};
             use std::io;
             use std::net::SocketAddr;
             use std::time::Duration;
-            use wasio::types::{__wasi_fd_t, AF_INET, AF_INET6, SOCK_STREAM};
+            use wasio::types::{__wasi_fd_t, AF_INET, AF_INET6, SOCK_STREAM, SockaddrIn};
 
             pub use crate::sys::net::{TcpListener, TcpStream};
             pub type TcpSocket = __wasi_fd_t;
@@ -332,8 +332,32 @@ cfg_os_poll! {
                 Ok(fd)
             }
 
-            pub fn bind(_socket: TcpSocket, _addr: SocketAddr) -> io::Result<()> {
-                todo!("`tcp::bind`");
+            pub fn bind(socket: TcpSocket, addr: SocketAddr) -> io::Result<()> {
+                let err = match addr {
+                    SocketAddr::V4(v4) => {
+                        let addr = SockaddrIn {
+                            sin_family: AF_INET as _,
+                            sin_port: v4.port().to_be(),
+                            sin_addr: v4.ip().octets(),
+                            sin_zero: [0; 8],
+                        };
+
+                        unsafe {
+                            socket_bind(
+                                socket,
+                                &addr as *const _ as *const u8,
+                                std::mem::size_of::<SockaddrIn>() as u32,
+                            )
+                        }
+                    },
+                    SocketAddr::V6(_v6) => unimplemented!("`tcp::bind` with IPv6`"),
+                };
+
+                if err != 0 {
+                    return Err(io::Error::new(io::ErrorKind::Other, format!("`tcp::socket_bind` failed with `{}`", err)));
+                }
+
+                Ok(())
             }
 
             pub fn connect(_socket: TcpSocket, _addr: SocketAddr) -> io::Result<TcpStream> {
