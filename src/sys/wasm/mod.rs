@@ -125,7 +125,7 @@ cfg_os_poll! {
             use std::time::Duration;
 
             pub use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, Shutdown, SocketAddrV4, SocketAddrV6};
-            pub use wasio::sys::{socket_create, socket_bind};
+            pub use wasio::sys::{socket_create, socket_bind, socket_listen};
 
             #[derive(Debug)]
             #[allow(unused)]
@@ -308,7 +308,7 @@ cfg_os_poll! {
 
         pub(crate) mod tcp {
             use crate::net::TcpKeepalive;
-            use crate::sys::net::{socket_create, socket_bind};
+            use crate::sys::net::{socket_create, socket_bind, socket_listen};
             use std::io;
             use std::net::SocketAddr;
             use std::time::Duration;
@@ -317,12 +317,18 @@ cfg_os_poll! {
             pub use crate::sys::net::{TcpListener, TcpStream};
             pub type TcpSocket = __wasi_fd_t;
 
+            macro_rules! io_err {
+                ($expr:expr) => {
+                    io::Error::new(io::ErrorKind::Other, $expr)
+                }
+            }
+
             pub fn new_v4_socket() -> io::Result<TcpSocket> {
                 let mut fd: __wasi_fd_t = 0;
                 let err = unsafe { socket_create(&mut fd, AF_INET, SOCK_STREAM, 0) };
 
                 if err != 0 {
-                    return Err(io::Error::new(io::ErrorKind::Other, format!("`tcp::socket_create` failed with `{}`", err)));
+                    return Err(io_err!(format!("`tcp::socket_create` failed with `{}`", err)));
                 }
 
                 Ok(fd)
@@ -333,12 +339,13 @@ cfg_os_poll! {
                 let err = unsafe { socket_create(&mut fd, AF_INET6, SOCK_STREAM, 0) };
 
                 if err != 0 {
-                    return Err(io::Error::new(io::ErrorKind::Other, format!("`tcp::socket_create` failed with `{}`", err)));
+                    return Err(io_err!(format!("`tcp::socket_create` failed with `{}`", err)));
                 }
 
                 Ok(fd)
             }
 
+            // IPv6 isn't supported for the moment.
             pub fn bind(socket: TcpSocket, addr: SocketAddr) -> io::Result<()> {
                 let err = match addr {
                     SocketAddr::V4(v4) => {
@@ -361,7 +368,7 @@ cfg_os_poll! {
                 };
 
                 if err != 0 {
-                    return Err(io::Error::new(io::ErrorKind::Other, format!("`tcp::socket_bind` failed with `{}`", err)));
+                    return Err(io_err!(format!("`tcp::socket_bind` failed with `{}`", err)));
                 }
 
                 Ok(())
@@ -371,8 +378,15 @@ cfg_os_poll! {
                 todo!("`tcp::connect`");
             }
 
-            pub fn listen(_socket: TcpSocket, _backlog: u32) -> io::Result<TcpListener> {
-                todo!("`tcp::listen`");
+            // `backlog` isn't used for the moment.
+            pub fn listen(socket: TcpSocket, _backlog: u32) -> io::Result<TcpListener> {
+                let err = unsafe { socket_listen(socket) };
+
+                if err != 0 {
+                    return Err(io_err!(format!("`tcp::socket_listen` failed with `{}`", err)));
+                }
+
+                Ok(TcpListener::new(socket))
             }
 
             pub fn accept(_listener: &TcpListener) -> io::Result<(TcpStream, SocketAddr)> {
