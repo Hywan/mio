@@ -53,6 +53,10 @@ miow   = "0.3.6"
 winapi = { version = "0.3", features = ["winsock2", "mswsock", "mstcpip"] }
 ntapi  = "0.3"
 
+[target.'cfg(target_os = "wasi")'.dependencies]
+wasio = { git = "https://github.com/wasmerio/wasmer", branch = "wasio" }
+slab = "0.4"
+
 [dev-dependencies]
 env_logger = { version = "0.6.2", default-features = false }
 rand = "0.4"

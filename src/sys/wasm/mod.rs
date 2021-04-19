@@ -1,6 +1,122 @@
+pub(crate) mod wasi {
+    // Code is copied from `wasmer-wasi`.
+    #![allow(non_camel_case_types)]
+
+    use std::fmt;
+
+    pub type __wasi_fd_t = u32;
+    pub const __WASI_STDIN_FILENO: u32 = 0;
+    pub const __WASI_STDOUT_FILENO: u32 = 1;
+    pub const __WASI_STDERR_FILENO: u32 = 2;
+
+    pub type __wasi_userdata_t = u64;
+
+    pub type __wasi_eventtype_t = u8;
+    pub const __WASI_EVENTTYPE_CLOCK: u8 = 0;
+    pub const __WASI_EVENTTYPE_FD_READ: u8 = 1;
+    pub const __WASI_EVENTTYPE_FD_WRITE: u8 = 2;
+
+    pub type __wasi_clockid_t = u32;
+    pub const __WASI_CLOCK_REALTIME: u32 = 0;
+    pub const __WASI_CLOCK_MONOTONIC: u32 = 1;
+    pub const __WASI_CLOCK_PROCESS_CPUTIME_ID: u32 = 2;
+    pub const __WASI_CLOCK_THREAD_CPUTIME_ID: u32 = 3;
+
+    pub type __wasi_timestamp_t = u64;
+
+    pub type __wasi_subclockflags_t = u16;
+    pub const __WASI_SUBSCRIPTION_CLOCK_ABSTIME: u16 = 1 << 0;
+
+    #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+    #[repr(C)]
+    pub struct __wasi_subscription_clock_t {
+        pub clock_id: __wasi_clockid_t,
+        pub timeout: __wasi_timestamp_t,
+        pub precision: __wasi_timestamp_t,
+        pub flags: __wasi_subclockflags_t,
+    }
+
+    #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+    #[repr(C)]
+    pub struct __wasi_subscription_fs_readwrite_t {
+        pub fd: __wasi_fd_t,
+    }
+
+    #[derive(Copy, Clone)]
+    #[repr(C)]
+    pub union __wasi_subscription_u {
+        pub clock: __wasi_subscription_clock_t,
+        pub fd_readwrite: __wasi_subscription_fs_readwrite_t,
+    }
+
+    #[derive(Copy, Clone)]
+    #[repr(C)]
+    pub struct __wasi_subscription_t {
+        pub userdata: __wasi_userdata_t,
+        pub type_: __wasi_eventtype_t,
+        pub u: __wasi_subscription_u,
+    }
+
+    pub type __wasi_errno_t = u16;
+    pub const __WASI_ESUCCESS: u16 = 0;
+
+    pub type __wasi_filesize_t = u64;
+
+    pub type __wasi_eventrwflags_t = u16;
+    pub const __WASI_EVENT_FD_READWRITE_HANGUP: u16 = 1 << 0;
+
+    #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+    #[repr(C)]
+    pub struct __wasi_event_fd_readwrite_t {
+        pub nbytes: __wasi_filesize_t,
+        pub flags: __wasi_eventrwflags_t,
+    }
+
+    #[derive(Copy, Clone)]
+    #[repr(C)]
+    pub union __wasi_event_u {
+        pub fd_readwrite: __wasi_event_fd_readwrite_t,
+    }
+
+    impl fmt::Debug for __wasi_event_u {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("__wasi_event_u")
+                .field("fd_readwrite", unsafe { &self.fd_readwrite })
+                .finish()
+        }
+    }
+
+    #[derive(Debug, Copy, Clone)]
+    #[repr(C)]
+    pub struct __wasi_event_t {
+        pub userdata: __wasi_userdata_t,
+        pub error: __wasi_errno_t,
+        pub type_: __wasi_eventtype_t,
+        pub u: __wasi_event_u,
+    }
+
+    pub(crate) mod sys {
+        #[link(wasm_import_module = "wasi_snapshot_preview1")]
+        extern "C" {
+            pub fn poll_oneoff(
+                subscriptions: *const super::__wasi_subscription_t,
+                events: *mut super::__wasi_event_t,
+                subscriptions_len: u32,
+                events_len: *mut u32,
+            ) -> super::__wasi_errno_t;
+        }
+    }
+}
+
 cfg_os_poll! {
     use crate::Token;
     use std::io;
+
+    macro_rules! io_err {
+        ($expr:expr) => {
+            io::Error::new(io::ErrorKind::Other, $expr)
+        }
+    }
 
     pub(crate) struct IoSourceState;
 
@@ -19,11 +135,27 @@ cfg_os_poll! {
 
     mod selector {
         use crate::{Token, Interest};
+        use slab::Slab;
+        use std::cell::RefCell;
         use std::io;
         use std::os::wasi::io::RawFd;
-        use std::time::Duration;
         #[cfg(debug_assertions)]
         use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+        use crate::sys::wasi::{
+            __WASI_ESUCCESS,
+            __WASI_EVENTTYPE_FD_READ,
+            __WASI_EVENTTYPE_FD_WRITE,
+            __wasi_errno_t,
+            __wasi_event_fd_readwrite_t,
+            __wasi_event_t,
+            __wasi_event_u,
+            __wasi_eventtype_t,
+            __wasi_subscription_fs_readwrite_t,
+            __wasi_subscription_t,
+            __wasi_subscription_u,
+            sys::poll_oneoff,
+        };
 
         #[cfg(debug_assertions)]
         static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
@@ -31,6 +163,7 @@ cfg_os_poll! {
         pub(crate) struct Selector {
             #[cfg(debug_assertions)]
             id: usize,
+            register: RefCell<Slab<(RawFd, Token, Interest)>>,
         }
 
         impl Selector {
@@ -41,19 +174,44 @@ cfg_os_poll! {
                 Ok(Self {
                     #[cfg(debug_assertions)]
                     id,
+                    register: RefCell::new(Slab::new()),
                 })
             }
 
-            pub(crate) fn register(&self, _fd: RawFd, _token: Token, _interests: Interest) -> io::Result<()> {
-                todo!("`Selector::register`");
+            pub(crate) fn register(&self, fd: RawFd, token: Token, interests: Interest) -> io::Result<()> {
+                self
+                    .register
+                    .try_borrow_mut()
+                    .map_err(|_| io_err!("Cannot borrow the register as mutable"))?
+                    .insert((fd, token, interests));
+
+                Ok(())
             }
 
             pub(crate) fn reregister(&self, _fd: RawFd, _token: Token, _interests: Interest) -> io::Result<()> {
                 todo!("`Selector::reregister`");
             }
 
-            pub(crate) fn deregister(&self, _fd: RawFd) -> io::Result<()> {
-                todo!("`Selector::deregister`");
+            pub(crate) fn deregister(&self, fd: RawFd) -> io::Result<()> {
+                let mut register = self
+                    .register
+                    .try_borrow_mut()
+                    .map_err(|_| io_err!("Cannot borrow the register as mutable"))?;
+
+                let index = register
+                    .iter()
+                    .find_map(|(index, (current_fd, _token, _interests))| {
+                        if current_fd == &fd {
+                            Some(index)
+                        } else {
+                            None
+                        }
+                    })
+                    .ok_or_else(|| io_err!(format!("Cannot deregister the file descriptor `{:?}` because it is not registered", fd)))?;
+
+                let _value = register.remove(index);
+
+                Ok(())
             }
 
             #[cfg(debug_assertions)]
@@ -61,8 +219,82 @@ cfg_os_poll! {
                 self.id
             }
 
-            pub(crate) fn select(&self, _events: &mut Events, _timeout: Option<Duration>) -> io::Result<()> {
-                todo!("``Selector::select");
+            pub(crate) fn select(&self, events: &mut Events, _timeout: Option<Duration>) -> io::Result<()> {
+                let mut register = self
+                    .register
+                    .try_borrow_mut()
+                    .map_err(|_| io_err!("Cannot borrow the register as mutable"))?;
+
+                // Transform the items in the register into WASI subscriptions.
+                let mut wasi_subscriptions = Vec::new();
+
+                for (fd, token, interests) in register.drain() {
+                    dbg!((&fd, &token, &interests));
+
+                    wasi_subscriptions.push(__wasi_subscription_t {
+                        userdata: Into::<usize>::into(token) as u64,
+                        type_: if interests.is_readable() {
+                            __WASI_EVENTTYPE_FD_READ
+                        } else if interests.is_writable() {
+                            __WASI_EVENTTYPE_FD_WRITE
+                        } else {
+                            return Err(io_err!(format!("Interest for file descriptor `{:?}` and token `{:?}` is not supported", fd, token)));
+                        },
+                        u: __wasi_subscription_u {
+                            fd_readwrite: __wasi_subscription_fs_readwrite_t {
+                                fd,
+                            }
+                        }
+                    });
+                }
+
+                // Prepare empty events to be filled by `poll_oneoff`.
+                let mut wasi_events = vec![
+                    __wasi_event_t {
+                        userdata: 0,
+                        error: 0,
+                        type_: 0,
+                        u: __wasi_event_u {
+                            fd_readwrite: __wasi_event_fd_readwrite_t {
+                                nbytes: 0,
+                                flags: 0,
+                            }
+                        }
+                    };
+                    wasi_subscriptions.len()
+                ];
+
+                let mut wasi_events_len: u32 = 0;
+
+                // Let's call the `poll_oneoff` syscall.
+                let result = unsafe { poll_oneoff(
+                    wasi_subscriptions.as_ptr(),
+                    wasi_events.as_mut_ptr(),
+                    wasi_subscriptions.len() as u32,
+                    &mut wasi_events_len as *mut _,
+                ) };
+
+                if result != __WASI_ESUCCESS {
+                    return Err(io_err!(format!("Calling `poll_oneoff` returned `{:?}` (i.e. not a success)", result)));
+                }
+
+                if wasi_events_len != wasi_events.len() as u32 {
+                    return Err(io_err!(format!("Unexpected number of events (expected `{:?}`, received `{:?}`)", wasi_events.len(), wasi_events_len)));
+                }
+
+                *events = wasi_events
+                    .iter()
+                    .map(|wasi_event| {
+                        dbg!(wasi_event);
+
+                        Event {
+                            wasi_errno: wasi_event.error,
+                            wasi_type: wasi_event.type_,
+                        }
+                    })
+                    .collect::<Events>();
+
+                Ok(())
             }
 
             pub(crate) fn try_clone(&self) -> io::Result<Self> {
@@ -77,7 +309,8 @@ cfg_os_poll! {
 
         #[derive(Clone)]
         pub(crate) struct Event {
-            foo: usize,
+            wasi_errno: __wasi_errno_t,
+            wasi_type: __wasi_eventtype_t,
         }
         pub(crate) type Events = Vec<Event>;
 
@@ -323,19 +556,14 @@ cfg_os_poll! {
         pub(crate) mod tcp {
             use crate::net::TcpKeepalive;
             use crate::sys::net::{socket_create, socket_bind, socket_listen};
+            use crate::sys::wasi::__wasi_fd_t;
             use std::io;
             use std::net::SocketAddr;
             use std::time::Duration;
-            use wasio::types::{__wasi_fd_t, AF_INET, AF_INET6, SOCK_STREAM, SockaddrIn};
+            use wasio::types::{AF_INET, AF_INET6, SOCK_STREAM, SockaddrIn};
 
             pub use crate::sys::net::{TcpListener, TcpStream};
             pub type TcpSocket = __wasi_fd_t;
-
-            macro_rules! io_err {
-                ($expr:expr) => {
-                    io::Error::new(io::ErrorKind::Other, $expr)
-                }
-            }
 
             pub fn new_v4_socket() -> io::Result<TcpSocket> {
                 let mut fd: __wasi_fd_t = 0;
