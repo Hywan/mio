@@ -22,12 +22,26 @@ cfg_os_poll! {
         use std::io;
         use std::os::wasi::io::RawFd;
         use std::time::Duration;
+        #[cfg(debug_assertions)]
+        use std::sync::atomic::{AtomicUsize, Ordering};
 
-        pub(crate) struct Selector;
+        #[cfg(debug_assertions)]
+        static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
+
+        pub(crate) struct Selector {
+            #[cfg(debug_assertions)]
+            id: usize,
+        }
 
         impl Selector {
             pub(crate) fn new() -> io::Result<Self> {
-                Ok(Self)
+                #[cfg(debug_assertions)]
+                let id = NEXT_ID.fetch_add(1, Ordering::Relax) + 1;
+
+                Ok(Self {
+                    #[cfg(debug_assertions)]
+                    id,
+                })
             }
 
             pub(crate) fn register(&self, _fd: RawFd, _token: Token, _interests: Interest) -> io::Result<()> {
@@ -42,9 +56,9 @@ cfg_os_poll! {
                 todo!("`Selector::deregister`");
             }
 
-            #[allow(unused)]
+            #[cfg(debug_assertions)]
             pub(crate) fn id(&self) -> usize {
-                todo!("`Selector::id`");
+                self.id
             }
 
             pub(crate) fn select(&self, _events: &mut Events, _timeout: Option<Duration>) -> io::Result<()> {
