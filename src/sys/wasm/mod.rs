@@ -358,8 +358,8 @@ cfg_os_poll! {
                 event.interest.is_aio()
             }
 
-            pub(crate) fn is_lio(_event: &Event) -> bool {
-                todo!("`event::is_lio`");
+            pub(crate) fn is_lio(event: &Event) -> bool {
+                event.interest.is_lio()
             }
 
             pub(crate) fn debug_details(_formatter: &mut fmt::Formatter<'_>, _event: &Event) -> fmt::Result {
