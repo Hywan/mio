@@ -354,8 +354,8 @@ cfg_os_poll! {
                 todo!("`event::is_priority`");
             }
 
-            pub(crate) fn is_aio(_event: &Event) -> bool {
-                todo!("`event::is_aio`");
+            pub(crate) fn is_aio(event: &Event) -> bool {
+                event.interest.is_aio()
             }
 
             pub(crate) fn is_lio(_event: &Event) -> bool {
