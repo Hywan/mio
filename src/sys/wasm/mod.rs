@@ -334,8 +334,8 @@ cfg_os_poll! {
                 event.interest.is_readable()
             }
 
-            pub(crate) fn is_writable(_event: &Event) -> bool {
-                todo!("`_event::is_writable`");
+            pub(crate) fn is_writable(event: &Event) -> bool {
+                event.interest.is_writable()
             }
 
             pub(crate) fn is_error(_event: &Event) -> bool {
