@@ -142,7 +142,7 @@ cfg_os_poll! {
         use std::num::TryFromIntError;
         use std::os::wasi::io::RawFd;
         #[cfg(debug_assertions)]
-        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
         use std::time::Duration;
         use crate::sys::wasi::{
             __WASI_ESUCCESS,
@@ -165,17 +165,18 @@ cfg_os_poll! {
             #[cfg(debug_assertions)]
             id: usize,
             register: RefCell<Slab<(RawFd, Token, Interest)>>,
+            #[cfg(debug_assertions)]
+            has_waker: AtomicBool,
         }
 
         impl Selector {
             pub(crate) fn new() -> io::Result<Self> {
-                #[cfg(debug_assertions)]
-                let id = NEXT_ID.fetch_add(1, Ordering::Relax) + 1;
-
                 Ok(Self {
                     #[cfg(debug_assertions)]
-                    id,
+                    id: NEXT_ID.fetch_add(1, Ordering::Relax) + 1,
                     register: RefCell::new(Slab::new()),
+                    #[cfg(debug_assertions)]
+                    has_waker: AtomicBool::new(false),
                 })
             }
 
@@ -309,7 +310,7 @@ cfg_os_poll! {
 
             #[cfg(debug_assertions)]
             pub(crate) fn register_waker(&self) -> bool {
-                todo!("`Selector::register_waker`");
+                self.has_waker.swap(true, Ordering::AcqRel)
             }
         }
 
