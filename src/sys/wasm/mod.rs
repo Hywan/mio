@@ -125,11 +125,11 @@ cfg_os_poll! {
             Self
         }
 
-        pub fn do_io<T, F, R>(&self, _f: F, _io: &T) -> io::Result<R>
+        pub fn do_io<T, F, R>(&self, f: F, io: &T) -> io::Result<R>
         where
             F: FnOnce(&T) -> io::Result<R>,
         {
-            todo!("`IoSourceState::do_io`");
+            f(io)
         }
     }
 
