@@ -641,7 +641,7 @@ cfg_os_poll! {
 
             impl AsRawFd for TcpStream {
                 fn as_raw_fd(&self) -> RawFd {
-                    todo!("`TcpStream::as_raw_fd`");
+                    self.socket.into()
                 }
             }
         }
