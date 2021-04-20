@@ -152,7 +152,6 @@ cfg_os_poll! {
             __wasi_event_fd_readwrite_t,
             __wasi_event_t,
             __wasi_event_u,
-            __wasi_eventtype_t,
             __wasi_subscription_fs_readwrite_t,
             __wasi_subscription_t,
             __wasi_subscription_u,
@@ -291,7 +290,11 @@ cfg_os_poll! {
 
                         Ok(Event {
                             wasi_errno: wasi_event.error,
-                            wasi_type: wasi_event.type_,
+                            interest: match wasi_event.type_ {
+                                __WASI_EVENTTYPE_FD_READ => Interest::READABLE,
+                                __WASI_EVENTTYPE_FD_WRITE => Interest::WRITABLE,
+                                ty => return Err(io_err!(format!("Invalid `__wasi_event_t.type_` value `{:?}`", ty))),
+                            },
                             token: Token(wasi_event.userdata.try_into().map_err(|e: TryFromIntError| io_err!(e.to_string()))?),
                         })
                     })
@@ -313,7 +316,7 @@ cfg_os_poll! {
         #[derive(Clone)]
         pub(crate) struct Event {
             wasi_errno: __wasi_errno_t,
-            wasi_type: __wasi_eventtype_t,
+            interest: Interest,
             token: Token,
         }
         pub(crate) type Events = Vec<Event>;
@@ -327,8 +330,8 @@ cfg_os_poll! {
                 event.token
             }
 
-            pub(crate) fn is_readable(_event: &Event) -> bool {
-                todo!("`_event::is_readable`");
+            pub(crate) fn is_readable(event: &Event) -> bool {
+                event.interest.is_readable()
             }
 
             pub(crate) fn is_writable(_event: &Event) -> bool {
