@@ -259,6 +259,10 @@ cfg_os_poll! {
             }
 
             pub(crate) fn register(&self, fd: RawFd, token: Token, interests: Interest) -> io::Result<()> {
+                dbg!("register!!");
+                dbg!(&fd);
+                dbg!(&token);
+                dbg!(&interests);
                 self
                     .register
                     .try_borrow_mut()
@@ -300,6 +304,7 @@ cfg_os_poll! {
             }
 
             pub(crate) fn select(&self, events: &mut Events, _timeout: Option<Duration>) -> io::Result<()> {
+                dbg!("select?");
                 let mut register = self
                     .register
                     .try_borrow_mut()
@@ -649,7 +654,7 @@ cfg_os_poll! {
         pub(crate) mod tcp {
             use crate::net::TcpKeepalive;
             use crate::sys::net::{socket_create, socket_bind, socket_listen, socket_pre_accept, socket_accept, socket_wait};
-            use crate::sys::wasi::{__wasi_fd_t, __WASI_EAGAIN};
+            use crate::sys::wasi::{__wasi_fd_t, __WASI_EAGAIN, __WASI_ESUCCESS};
             use std::io;
             use std::mem;
             use std::net::{SocketAddr, IpAddr, Ipv4Addr};
@@ -729,6 +734,8 @@ cfg_os_poll! {
                 let mut cancellation_token = CancellationToken(0);
                 let mut user_context = UserContext(0);
 
+                println!("================= before socket_pre_accept");
+
                 let mut err = unsafe {
                     socket_pre_accept(
                         listener.socket,
@@ -737,9 +744,13 @@ cfg_os_poll! {
                     )
                 };
 
+                println!("================= after socket_pre_accept");
+
                 if err != 0 {
                     return Err(io_err!(format!("`tcp::socket_pre_accept` failed with `{}`", err)));
                 }
+
+                println!("================= before socket_wait");
 
                 err = 0;
                 unsafe { socket_wait(&mut err, &mut user_context) };
@@ -748,8 +759,13 @@ cfg_os_poll! {
                     return Err(io_err!(format!("`tcp::socket_wait` failed with `{}`", err)));
                 }
 
+                println!("================= after socket_wait");
+
                 let mut connection: __wasi_fd_t = 0;
                 let mut address = SockaddrIn::default();
+
+                println!("================= before socket_accept");
+
                 let err = unsafe {
                     socket_accept(
                         &mut connection,
@@ -758,22 +774,28 @@ cfg_os_poll! {
                     )
                 };
 
-                if err != 0 && err != __WASI_EAGAIN {
-                    return Err(io_err!(format!("`tcp::socket_accept` failed with `{}`", err)));
+                println!("================= after socket_accept");
+
+                match err {
+                    __WASI_ESUCCESS => {
+                        let port = address.sin_port;
+
+                        #[cfg(target_endian = "little")]
+                        let port = port.to_le();
+
+                        let socket: TcpSocket = connection;
+                        let address = SocketAddr::new(IpAddr::V4(address.sin_addr.into()), port);
+
+                        dbg!(&socket);
+                        dbg!(&address);
+
+                        Ok((TcpStream::new(socket, address), address))
+                    },
+
+                    __WASI_EAGAIN => Err(io::Error::new(io::ErrorKind::WouldBlock, "`tcp::socket_accept` returned __WASI_EAGAIN")),
+
+                    _ => Err(io_err!(format!("`tcp::socket_accept` failed with `{}`", err))),
                 }
-
-                let port = address.sin_port;
-
-                #[cfg(target_endian = "little")]
-                let port = port.to_le();
-
-                let socket: TcpSocket = connection;
-                let address = SocketAddr::new(IpAddr::V4(address.sin_addr.into()), port);
-
-                dbg!(&socket);
-                dbg!(&address);
-
-                Ok((TcpStream::new(socket, address), address))
             }
 
             pub fn set_reuseaddr(_socket: TcpSocket, _reuseaddr: bool) -> io::Result<()> {
