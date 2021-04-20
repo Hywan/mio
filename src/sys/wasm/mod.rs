@@ -137,7 +137,9 @@ cfg_os_poll! {
         use crate::{Token, Interest};
         use slab::Slab;
         use std::cell::RefCell;
+        use std::convert::TryInto;
         use std::io;
+        use std::num::TryFromIntError;
         use std::os::wasi::io::RawFd;
         #[cfg(debug_assertions)]
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -287,12 +289,13 @@ cfg_os_poll! {
                     .map(|wasi_event| {
                         dbg!(wasi_event);
 
-                        Event {
+                        Ok(Event {
                             wasi_errno: wasi_event.error,
                             wasi_type: wasi_event.type_,
-                        }
+                            token: Token(wasi_event.userdata.try_into().map_err(|e: TryFromIntError| io_err!(e.to_string()))?),
+                        })
                     })
-                    .collect::<Events>();
+                    .collect::<io::Result<Events>>()?;
 
                 Ok(())
             }
@@ -311,6 +314,7 @@ cfg_os_poll! {
         pub(crate) struct Event {
             wasi_errno: __wasi_errno_t,
             wasi_type: __wasi_eventtype_t,
+            token: Token,
         }
         pub(crate) type Events = Vec<Event>;
 
@@ -319,8 +323,8 @@ cfg_os_poll! {
             use crate::sys::Event;
             use std::fmt;
 
-            pub(crate) fn token(_event: &Event) -> Token {
-                todo!("`_event::token`");
+            pub(crate) fn token(event: &Event) -> Token {
+                event.token
             }
 
             pub(crate) fn is_readable(_event: &Event) -> bool {
