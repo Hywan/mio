@@ -92,7 +92,7 @@ impl Selector {
     }
 
     pub(crate) fn select(&self, events: &mut Events, _timeout: Option<Duration>) -> io::Result<()> {
-        println!("> Selector::select");
+        println!("•");
 
         let mut register = self
             .register
@@ -166,8 +166,9 @@ impl Selector {
 
         *events = wasi_events
             .iter()
+            .filter(|wasi_event| wasi_event.error == __WASI_ESUCCESS)
             .map(|wasi_event| {
-                //dbg!(wasi_event);
+                dbg!(wasi_event);
 
                 Ok(Event {
                     wasi_errno: wasi_event.error,
@@ -203,6 +204,8 @@ impl Selector {
                 })
             })
             .collect::<io::Result<Events>>()?;
+
+        dbg!(&events.len());
 
         Ok(())
     }

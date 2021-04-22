@@ -98,7 +98,8 @@ impl Selector {
     }
 
     pub fn select(&self, events: &mut Events, timeout: Option<Duration>) -> io::Result<()> {
-        println!("inside `SElector::select`");
+        println!("•");
+        let timeout = Some(Duration::from_secs(1));
         let timeout = timeout.map(|to| libc::timespec {
             tv_sec: cmp::min(to.as_secs(), libc::time_t::max_value() as u64) as libc::time_t,
             // `Duration::subsec_nanos` is guaranteed to be less than one
@@ -127,8 +128,6 @@ impl Selector {
             unsafe { events.set_len(n_events as usize) };
         });
 
-        println!("DOOOOOOOOOOOOOOOOOOOOOONE `Selector::select`");
-
         a
     }
 
@@ -138,6 +137,9 @@ impl Selector {
         let mut changes: [MaybeUninit<libc::kevent>; 2] =
             [MaybeUninit::uninit(), MaybeUninit::uninit()];
         let mut n_changes = 0;
+
+        println!("> Selector::register");
+        dbg!((&fd, &token, &interests));
 
         if interests.is_writable() {
             let kevent = kevent!(fd, libc::EVFILT_WRITE, flags, token.0);
