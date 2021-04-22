@@ -173,6 +173,8 @@ pub(crate) mod wasi {
         pub u: __wasi_event_u,
     }
 
+    pub use wasio::types::__wasi_ciovec_t;
+
     pub(crate) mod sys {
         #[link(wasm_import_module = "wasi_snapshot_preview1")]
         extern "C" {
@@ -259,10 +261,9 @@ cfg_os_poll! {
             }
 
             pub(crate) fn register(&self, fd: RawFd, token: Token, interests: Interest) -> io::Result<()> {
-                dbg!("register!!");
-                dbg!(&fd);
-                dbg!(&token);
-                dbg!(&interests);
+                println!("> Selector::register");
+                dbg!((&fd, &token, &interests));
+
                 self
                     .register
                     .try_borrow_mut()
@@ -304,7 +305,8 @@ cfg_os_poll! {
             }
 
             pub(crate) fn select(&self, events: &mut Events, _timeout: Option<Duration>) -> io::Result<()> {
-                dbg!("select?");
+                println!("> Selector::select");
+
                 let mut register = self
                     .register
                     .try_borrow_mut()
@@ -313,11 +315,9 @@ cfg_os_poll! {
                 // Transform the items in the register into WASI subscriptions.
                 let mut wasi_subscriptions = Vec::new();
 
-                for (fd, token, interests) in register.drain() {
-                    dbg!((&fd, &token, &interests));
-
+                for (_, (fd, token, interests)) in register.iter() {
                     wasi_subscriptions.push(__wasi_subscription_t {
-                        userdata: Into::<usize>::into(token) as u64,
+                        userdata: Into::<usize>::into(*token) as u64,
                         type_: if interests.is_readable() {
                             __WASI_EVENTTYPE_FD_READ
                         } else if interests.is_writable() {
@@ -327,7 +327,7 @@ cfg_os_poll! {
                         },
                         u: __wasi_subscription_u {
                             fd_readwrite: __wasi_subscription_fs_readwrite_t {
-                                fd,
+                                fd: *fd,
                             }
                         }
                     });
@@ -370,14 +370,29 @@ cfg_os_poll! {
                 *events = wasi_events
                     .iter()
                     .map(|wasi_event| {
-                        dbg!(wasi_event);
+                        //dbg!(wasi_event);
 
                         Ok(Event {
                             wasi_errno: wasi_event.error,
-                            interest: match wasi_event.type_ {
-                                __WASI_EVENTTYPE_FD_READ => Interest::READABLE,
-                                __WASI_EVENTTYPE_FD_WRITE => Interest::WRITABLE,
-                                ty => return Err(io_err!(format!("Invalid `__wasi_event_t.type_` value `{}`", ty))),
+                            interest: {
+                                let mut readable = None;
+                                let mut writable = None;
+
+                                if (wasi_event.type_ & __WASI_EVENTTYPE_FD_READ) != 0 {
+                                    readable = Some(Interest::READABLE);
+                                }
+
+                                if (wasi_event.type_ & __WASI_EVENTTYPE_FD_WRITE) != 0 {
+                                    writable = Some(Interest::WRITABLE);
+                                }
+
+                                match (readable, writable) {
+                                    (Some(readable), None) => readable,
+                                    (None, Some(writable)) => writable,
+                                    (Some(readable), Some(writable)) => readable.add(writable),
+                                    (None, None) => return Err(io_err!("Interests of `__wasi_event_t` (`{:?}`) seem invalid")),
+                                }
+
                             },
                             token: Token(wasi_event.userdata.try_into().map_err(|e: TryFromIntError| io_err!(e.to_string()))?),
                         })
@@ -408,6 +423,7 @@ cfg_os_poll! {
         pub(crate) mod event {
             use crate::Token;
             use crate::sys::Event;
+            use crate::sys::wasi::{__WASI_ESUCCESS, __WASI_ECONNABORTED, __WASI_ECONNREFUSED, __WASI_ENOTCONN};
             use std::fmt;
 
             pub(crate) fn token(event: &Event) -> Token {
@@ -422,20 +438,28 @@ cfg_os_poll! {
                 event.interest.is_writable()
             }
 
-            pub(crate) fn is_error(_event: &Event) -> bool {
-                todo!("`_event::is_error`");
+            pub(crate) fn is_error(event: &Event) -> bool {
+                event.wasi_errno != __WASI_ESUCCESS
             }
 
-            pub(crate) fn is_read_closed(_event: &Event) -> bool {
-                todo!("`_event::is_read_closed`");
+            // TODO
+            pub(crate) fn is_read_closed(event: &Event) -> bool {
+                is_readable(event) &&
+                    ((event.wasi_errno == __WASI_ECONNABORTED)
+                     || (event.wasi_errno == __WASI_ECONNREFUSED)
+                     || (event.wasi_errno == __WASI_ENOTCONN))
             }
 
-            pub(crate) fn is_write_closed(_event: &Event) -> bool {
-                todo!("`_event::is_write_closed`");
+            // TODO
+            pub(crate) fn is_write_closed(event: &Event) -> bool {
+                is_writable(event) &&
+                    ((event.wasi_errno == __WASI_ECONNABORTED)
+                     || (event.wasi_errno == __WASI_ECONNREFUSED)
+                     || (event.wasi_errno == __WASI_ENOTCONN))
             }
 
             pub(crate) fn is_priority(_event: &Event) -> bool {
-                todo!("`event::is_priority`");
+                false
             }
 
             pub(crate) fn is_aio(event: &Event) -> bool {
@@ -446,8 +470,9 @@ cfg_os_poll! {
                 event.interest.is_lio()
             }
 
+            // TODO
             pub(crate) fn debug_details(_formatter: &mut fmt::Formatter<'_>, _event: &Event) -> fmt::Result {
-                todo!("`event::debug_details`");
+                Ok(())
             }
         }
     }
@@ -456,14 +481,15 @@ cfg_os_poll! {
 
     cfg_net! {
         pub(crate) mod net {
-            use crate::sys::tcp::TcpSocket;
+            use crate::sys::tcp::{TcpSocket, read};
             use std::io;
             use std::net::ToSocketAddrs;
             use std::os::wasi::io::{AsRawFd, RawFd};
             use std::time::Duration;
+            use wasio::types::{CancellationToken, UserContext};
 
             pub use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, Shutdown, SocketAddrV4, SocketAddrV6};
-            pub use wasio::sys::{socket_create, socket_bind, socket_listen, socket_pre_accept, socket_accept, wait as socket_wait};
+            pub use wasio::sys::{socket_create, socket_bind, socket_listen, socket_pre_accept, socket_accept, wait as socket_wait, socket_recv};
 
             #[derive(Debug)]
             #[allow(unused)]
@@ -613,14 +639,14 @@ cfg_os_poll! {
             }
 
             impl io::Read for TcpStream {
-                fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
-                    todo!("`TcpStream::read`");
+                fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                    read(self.socket, buf)
                 }
             }
 
             impl io::Read for &TcpStream {
-                fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
-                    todo!("`TcpStream::read`");
+                fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                    read(self.socket, buf)
                 }
             }
 
@@ -653,8 +679,8 @@ cfg_os_poll! {
 
         pub(crate) mod tcp {
             use crate::net::TcpKeepalive;
-            use crate::sys::net::{socket_create, socket_bind, socket_listen, socket_pre_accept, socket_accept, socket_wait};
-            use crate::sys::wasi::{__wasi_fd_t, __WASI_EAGAIN, __WASI_ESUCCESS};
+            use crate::sys::net::{socket_create, socket_bind, socket_listen, socket_pre_accept, socket_accept, socket_wait, socket_recv};
+            use crate::sys::wasi::{__wasi_fd_t, __WASI_EAGAIN, __WASI_ESUCCESS, __wasi_ciovec_t};
             use std::io;
             use std::mem;
             use std::net::{SocketAddr, IpAddr, Ipv4Addr};
@@ -734,8 +760,6 @@ cfg_os_poll! {
                 let mut cancellation_token = CancellationToken(0);
                 let mut user_context = UserContext(0);
 
-                println!("================= before socket_pre_accept");
-
                 let mut err = unsafe {
                     socket_pre_accept(
                         listener.socket,
@@ -744,13 +768,12 @@ cfg_os_poll! {
                     )
                 };
 
-                println!("================= after socket_pre_accept");
-
                 if err != 0 {
                     return Err(io_err!(format!("`tcp::socket_pre_accept` failed with `{}`", err)));
                 }
 
-                println!("================= before socket_wait");
+                /*
+                println!(">> before socket_wait");
 
                 err = 0;
                 unsafe { socket_wait(&mut err, &mut user_context) };
@@ -759,12 +782,11 @@ cfg_os_poll! {
                     return Err(io_err!(format!("`tcp::socket_wait` failed with `{}`", err)));
                 }
 
-                println!("================= after socket_wait");
+                println!(">> after socket_wait");
+                */
 
                 let mut connection: __wasi_fd_t = 0;
                 let mut address = SockaddrIn::default();
-
-                println!("================= before socket_accept");
 
                 let err = unsafe {
                     socket_accept(
@@ -773,8 +795,6 @@ cfg_os_poll! {
                         mem::size_of::<SockaddrIn>() as u32,
                     )
                 };
-
-                println!("================= after socket_accept");
 
                 match err {
                     __WASI_ESUCCESS => {
@@ -785,9 +805,6 @@ cfg_os_poll! {
 
                         let socket: TcpSocket = connection;
                         let address = SocketAddr::new(IpAddr::V4(address.sin_addr.into()), port);
-
-                        dbg!(&socket);
-                        dbg!(&address);
 
                         Ok((TcpStream::new(socket, address), address))
                     },
@@ -858,6 +875,36 @@ cfg_os_poll! {
 
             pub fn close(_socket: TcpSocket) {
                 todo!("`tcp::close`");
+            }
+
+            // custom functions
+
+            pub fn read(socket: TcpSocket, buf: &mut [u8]) -> io::Result<usize> {
+                let iov = __wasi_ciovec_t {
+                    buf: buf.as_mut_ptr(),
+                    buf_len: buf.len() as u32,
+                };
+                let mut cancellation_token = CancellationToken(0);
+                let mut read_buffer_length = 0;
+
+                let err = unsafe {
+                    socket_recv(
+                        socket,
+                        &iov,
+                        1,
+                        0,
+                        &mut read_buffer_length,
+                        std::ptr::null_mut(),
+                        UserContext(0),
+                        &mut cancellation_token,
+                    )
+                };
+
+                if err != 0 {
+                    return Err(io_err!(format!("`TcpStream::read` failed with `{}`", err)));
+                }
+
+                Ok(read_buffer_length as usize)
             }
         }
 

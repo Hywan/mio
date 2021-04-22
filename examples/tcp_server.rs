@@ -102,7 +102,7 @@ fn handle_connection_event(
     connection: &mut TcpStream,
     event: &Event,
 ) -> io::Result<bool> {
-    if event.is_writable() {
+    if dbg!(event).is_writable() {
         // We can (maybe) write to the connection.
         match connection.write(DATA) {
             // We want to write the entire `DATA` buffer in a single go. If we

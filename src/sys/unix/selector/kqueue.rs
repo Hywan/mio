@@ -98,6 +98,7 @@ impl Selector {
     }
 
     pub fn select(&self, events: &mut Events, timeout: Option<Duration>) -> io::Result<()> {
+        println!("inside `SElector::select`");
         let timeout = timeout.map(|to| libc::timespec {
             tv_sec: cmp::min(to.as_secs(), libc::time_t::max_value() as u64) as libc::time_t,
             // `Duration::subsec_nanos` is guaranteed to be less than one
@@ -112,7 +113,7 @@ impl Selector {
             .unwrap_or(ptr::null_mut());
 
         events.clear();
-        syscall!(kevent(
+        let a = syscall!(kevent(
             self.kq,
             ptr::null(),
             0,
@@ -124,7 +125,11 @@ impl Selector {
             // This is safe because `kevent` ensures that `n_events` are
             // assigned.
             unsafe { events.set_len(n_events as usize) };
-        })
+        });
+
+        println!("DOOOOOOOOOOOOOOOOOOOOOONE `Selector::select`");
+
+        a
     }
 
     pub fn register(&self, fd: RawFd, token: Token, interests: Interest) -> io::Result<()> {
