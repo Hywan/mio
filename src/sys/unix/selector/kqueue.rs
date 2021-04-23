@@ -114,7 +114,7 @@ impl Selector {
             .unwrap_or(ptr::null_mut());
 
         events.clear();
-        let a = syscall!(kevent(
+        syscall!(kevent(
             self.kq,
             ptr::null(),
             0,
@@ -126,9 +126,7 @@ impl Selector {
             // This is safe because `kevent` ensures that `n_events` are
             // assigned.
             unsafe { events.set_len(n_events as usize) };
-        });
-
-        a
+        })
     }
 
     pub fn register(&self, fd: RawFd, token: Token, interests: Interest) -> io::Result<()> {

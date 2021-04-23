@@ -417,6 +417,8 @@ pub(crate) fn get_keepalive_retries(socket: TcpSocket) -> io::Result<Option<u32>
 }
 
 pub fn accept(listener: &TcpListener) -> io::Result<(TcpStream, SocketAddr)> {
+    println!("> tcp::accept");
+
     let mut addr: MaybeUninit<libc::sockaddr_storage> = MaybeUninit::uninit();
     let mut length = size_of::<libc::sockaddr_storage>() as libc::socklen_t;
 

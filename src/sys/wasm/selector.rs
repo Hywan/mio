@@ -1,3 +1,4 @@
+use crate::sys::net::{socket_pre_accept, socket_wait};
 use crate::sys::wasi::{
     __wasi_errno_t, __wasi_event_fd_readwrite_t, __wasi_event_t, __wasi_event_u,
     __wasi_subscription_fs_readwrite_t, __wasi_subscription_t, __wasi_subscription_u,
@@ -13,14 +14,22 @@ use std::os::wasi::io::RawFd;
 #[cfg(debug_assertions)]
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
+use wasio::types::{CancellationToken, UserContext};
 
 #[cfg(debug_assertions)]
 static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
 
+pub(crate) struct RegisteredFd {
+    fd: RawFd,
+    token: Token,
+    interests: Interest,
+    cancellation_token: CancellationToken,
+}
+
 pub(crate) struct Selector {
     #[cfg(debug_assertions)]
     id: usize,
-    register: RefCell<Slab<(RawFd, Token, Interest)>>,
+    register: RefCell<Slab<RegisteredFd>>,
     #[cfg(debug_assertions)]
     has_waker: AtomicBool,
 }
@@ -37,13 +46,34 @@ impl Selector {
     }
 
     pub(crate) fn register(&self, fd: RawFd, token: Token, interests: Interest) -> io::Result<()> {
-        println!("> Selector::register");
-        dbg!((&fd, &token, &interests));
+        if token.0 > 0 {
+            return Ok(());
+        }
+
+        dbg!((&fd, &token));
+
+        let user_context = UserContext(token.0.try_into().unwrap());
+        let mut cancellation_token = CancellationToken(0);
+
+        println!("socket_pre_accept");
+        let err = unsafe { socket_pre_accept(fd, user_context, &mut cancellation_token) };
+
+        if err != 0 {
+            return Err(io_err!(format!(
+                "`Selector::register` failed with `{}`",
+                err
+            )));
+        }
 
         self.register
             .try_borrow_mut()
             .map_err(|_| io_err!("Cannot borrow the register as mutable"))?
-            .insert((fd, token, interests));
+            .insert(RegisteredFd {
+                fd,
+                token,
+                interests,
+                cancellation_token,
+            });
 
         Ok(())
     }
@@ -66,7 +96,7 @@ impl Selector {
         let index = register
             .iter()
             .find_map(
-                |(index, (current_fd, _token, _interests))| {
+                |(index, RegisteredFd { fd: current_fd, .. })| {
                     if current_fd == &fd {
                         Some(index)
                     } else {
@@ -81,6 +111,8 @@ impl Selector {
                 ))
             })?;
 
+        // TODO: do something with `cancellation_token`
+
         let _value = register.remove(index);
 
         Ok(())
@@ -94,15 +126,100 @@ impl Selector {
     pub(crate) fn select(&self, events: &mut Events, _timeout: Option<Duration>) -> io::Result<()> {
         println!("•");
 
-        let mut register = self
-            .register
-            .try_borrow_mut()
-            .map_err(|_| io_err!("Cannot borrow the register as mutable"))?;
+        let mut err = 0;
+        let mut user_context = UserContext(0);
+        println!("waiting…");
+        unsafe { socket_wait(&mut err, &mut user_context) };
 
+        if err != 0 {
+            return Err(io_err!(format!("`Selector::select` failed with `{}`", err)));
+        }
+
+        dbg!(&user_context);
+        let retrieved_token = Token(user_context.0.try_into().unwrap());
+
+        *events = self
+            .register
+            .try_borrow()
+            .map_err(|_| io_err!("Cannot borrow the register as mutable"))?
+            .iter()
+            .filter_map(|(_, registered_fd)| {
+                if registered_fd.token != retrieved_token {
+                    None
+                } else {
+                    Some(registered_fd)
+                }
+            })
+            /*
+            .inspect(
+                |RegisteredFd {
+                     fd,
+                     token,
+                     //ref mut cancellation_token,
+                     ..
+                 }| {
+                    let mut cancellation_token = CancellationToken(0);
+                    let err = unsafe {
+                        socket_pre_accept(
+                            *fd,
+                            UserContext(token.0.try_into().unwrap()),
+                            &mut cancellation_token,
+                        )
+                    };
+                    if err != 0 {
+                        panic!("damned");
+                    }
+                },
+            )
+            */
+            .map(|RegisteredFd { fd, token, .. }| {
+                Event {
+                    wasi_errno: err,
+                    interest: {
+                        /*
+                        let mut readable = None;
+                        let mut writable = None;
+
+                        if (wasi_event.type_ & __WASI_EVENTTYPE_FD_READ) != 0 {
+                            readable = Some(Interest::READABLE);
+                        }
+
+                        if (wasi_event.type_ & __WASI_EVENTTYPE_FD_WRITE) != 0 {
+                            writable = Some(Interest::WRITABLE);
+                        }
+
+                        match (readable, writable) {
+                            (Some(readable), None) => readable,
+                            (None, Some(writable)) => writable,
+                            (Some(readable), Some(writable)) => readable.add(writable),
+                            (None, None) => {
+                                return Err(io_err!(
+                                    "Interests of `__wasi_event_t` (`{:?}`) seem invalid"
+                                ))
+                            }
+                        }
+                         */
+                        Interest::READABLE.add(Interest::WRITABLE)
+                    },
+                    token: retrieved_token,
+                }
+            })
+            .collect();
+
+        /*
         // Transform the items in the register into WASI subscriptions.
         let mut wasi_subscriptions = Vec::new();
 
-        for (_, (fd, token, interests)) in register.iter() {
+        for (
+            _,
+            RegisteredFd {
+                fd,
+                token,
+                interests,
+                ..
+            },
+        ) in register.iter()
+        {
             wasi_subscriptions.push(__wasi_subscription_t {
                 userdata: Into::<usize>::into(*token) as u64,
                 type_: if interests.is_readable() {
@@ -204,8 +321,7 @@ impl Selector {
                 })
             })
             .collect::<io::Result<Events>>()?;
-
-        dbg!(&events.len());
+        */
 
         Ok(())
     }

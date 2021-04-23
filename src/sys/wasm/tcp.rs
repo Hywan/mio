@@ -1,4 +1,3 @@
-
 use crate::net::TcpKeepalive;
 use crate::sys::net::{
     socket_accept, socket_bind, socket_create, socket_listen, socket_pre_accept, socket_recv,
@@ -90,6 +89,7 @@ pub fn listen(socket: TcpSocket, _backlog: u32) -> io::Result<TcpListener> {
 }
 
 pub fn accept(listener: &TcpListener) -> io::Result<(TcpStream, SocketAddr)> {
+    /*
     let mut cancellation_token = CancellationToken(0);
     let mut user_context = UserContext(0);
 
@@ -102,6 +102,7 @@ pub fn accept(listener: &TcpListener) -> io::Result<(TcpStream, SocketAddr)> {
             err
         )));
     }
+    */
 
     /*
     println!(">> before socket_wait");
@@ -119,6 +120,7 @@ pub fn accept(listener: &TcpListener) -> io::Result<(TcpStream, SocketAddr)> {
     let mut connection: __wasi_fd_t = 0;
     let mut address = SockaddrIn::default();
 
+    println!("socket_accept");
     let err = unsafe {
         socket_accept(
             &mut connection,
