@@ -46,16 +46,10 @@ impl Selector {
     }
 
     pub(crate) fn register(&self, fd: RawFd, token: Token, interests: Interest) -> io::Result<()> {
-        if token.0 > 0 {
-            return Ok(());
-        }
-
-        dbg!((&fd, &token));
-
         let user_context = UserContext(token.0.try_into().unwrap());
         let mut cancellation_token = CancellationToken(0);
 
-        println!("socket_pre_accept");
+        println!("socket_pre_accept fd={:?} token={:?}", fd, token);
         let err = unsafe { socket_pre_accept(fd, user_context, &mut cancellation_token) };
 
         if err != 0 {
@@ -150,7 +144,6 @@ impl Selector {
                     Some(registered_fd)
                 }
             })
-            /*
             .inspect(
                 |RegisteredFd {
                      fd,
@@ -159,6 +152,7 @@ impl Selector {
                      ..
                  }| {
                     let mut cancellation_token = CancellationToken(0);
+                    println!("socket_pre_accept (again) fd={:?} token={:?}", fd, token,);
                     let err = unsafe {
                         socket_pre_accept(
                             *fd,
@@ -171,7 +165,6 @@ impl Selector {
                     }
                 },
             )
-            */
             .map(|RegisteredFd { fd, token, .. }| {
                 Event {
                     wasi_errno: err,
