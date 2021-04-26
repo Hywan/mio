@@ -85,42 +85,27 @@ pub fn listen(socket: TcpSocket, _backlog: u32) -> io::Result<TcpListener> {
         )));
     }
 
+    let mut cancellation_token = CancellationToken(0);
+    let mut user_context = UserContext(0);
+
+    let err = unsafe { socket_pre_accept(socket, user_context, &mut cancellation_token) };
+
+    if err != 0 {
+        return Err(io_err!(format!(
+            "`tcp::socket_listen` pre-accepting failed with `{}`",
+            err
+        )));
+    }
+
     Ok(TcpListener::new(socket))
 }
 
 pub fn accept(listener: &TcpListener) -> io::Result<(TcpStream, SocketAddr)> {
-    /*
-    let mut cancellation_token = CancellationToken(0);
-    let mut user_context = UserContext(0);
-
-    let mut err =
-        unsafe { socket_pre_accept(listener.socket, user_context, &mut cancellation_token) };
-
-    if err != 0 {
-        return Err(io_err!(format!(
-            "`tcp::socket_pre_accept` failed with `{}`",
-            err
-        )));
-    }
-    */
-
-    /*
-    println!(">> before socket_wait");
-
-    err = 0;
-    unsafe { socket_wait(&mut err, &mut user_context) };
-
-    if err != 0 {
-        return Err(io_err!(format!("`tcp::socket_wait` failed with `{}`", err)));
-    }
-
-    println!(">> after socket_wait");
-    */
-
     let mut connection: __wasi_fd_t = 0;
     let mut address = SockaddrIn::default();
 
     println!("socket_accept");
+
     let err = unsafe {
         socket_accept(
             &mut connection,
@@ -128,6 +113,24 @@ pub fn accept(listener: &TcpListener) -> io::Result<(TcpStream, SocketAddr)> {
             mem::size_of::<SockaddrIn>() as u32,
         )
     };
+
+    dbg!(&err);
+    dbg!(&connection);
+
+    let mut cancellation_token = CancellationToken(0);
+    let mut user_context = UserContext(0);
+
+    {
+        let mut err =
+            unsafe { socket_pre_accept(listener.socket, user_context, &mut cancellation_token) };
+
+        if err != 0 {
+            return Err(io_err!(format!(
+                "`tcp::socket_pre_accept` failed with `{}`",
+                err
+            )));
+        }
+    }
 
     match err {
         __WASI_ESUCCESS => {

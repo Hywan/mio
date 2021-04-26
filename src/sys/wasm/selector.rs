@@ -19,6 +19,7 @@ use wasio::types::{CancellationToken, UserContext};
 #[cfg(debug_assertions)]
 static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
 
+#[derive(Debug)]
 pub(crate) struct RegisteredFd {
     fd: RawFd,
     token: Token,
@@ -48,16 +49,6 @@ impl Selector {
     pub(crate) fn register(&self, fd: RawFd, token: Token, interests: Interest) -> io::Result<()> {
         let user_context = UserContext(token.0.try_into().unwrap());
         let mut cancellation_token = CancellationToken(0);
-
-        println!("socket_pre_accept fd={:?} token={:?}", fd, token);
-        let err = unsafe { socket_pre_accept(fd, user_context, &mut cancellation_token) };
-
-        if err != 0 {
-            return Err(io_err!(format!(
-                "`Selector::register` failed with `{}`",
-                err
-            )));
-        }
 
         self.register
             .try_borrow_mut()
@@ -138,183 +129,19 @@ impl Selector {
             .map_err(|_| io_err!("Cannot borrow the register as mutable"))?
             .iter()
             .filter_map(|(_, registered_fd)| {
+                dbg!(&registered_fd);
                 if registered_fd.token != retrieved_token {
                     None
                 } else {
                     Some(registered_fd)
                 }
             })
-            .inspect(
-                |RegisteredFd {
-                     fd,
-                     token,
-                     //ref mut cancellation_token,
-                     ..
-                 }| {
-                    let mut cancellation_token = CancellationToken(0);
-                    println!("socket_pre_accept (again) fd={:?} token={:?}", fd, token,);
-                    let err = unsafe {
-                        socket_pre_accept(
-                            *fd,
-                            UserContext(token.0.try_into().unwrap()),
-                            &mut cancellation_token,
-                        )
-                    };
-                    if err != 0 {
-                        panic!("damned");
-                    }
-                },
-            )
-            .map(|RegisteredFd { fd, token, .. }| {
-                Event {
-                    wasi_errno: err,
-                    interest: {
-                        /*
-                        let mut readable = None;
-                        let mut writable = None;
-
-                        if (wasi_event.type_ & __WASI_EVENTTYPE_FD_READ) != 0 {
-                            readable = Some(Interest::READABLE);
-                        }
-
-                        if (wasi_event.type_ & __WASI_EVENTTYPE_FD_WRITE) != 0 {
-                            writable = Some(Interest::WRITABLE);
-                        }
-
-                        match (readable, writable) {
-                            (Some(readable), None) => readable,
-                            (None, Some(writable)) => writable,
-                            (Some(readable), Some(writable)) => readable.add(writable),
-                            (None, None) => {
-                                return Err(io_err!(
-                                    "Interests of `__wasi_event_t` (`{:?}`) seem invalid"
-                                ))
-                            }
-                        }
-                         */
-                        Interest::READABLE.add(Interest::WRITABLE)
-                    },
-                    token: retrieved_token,
-                }
+            .map(|RegisteredFd { fd, token, .. }| Event {
+                wasi_errno: err,
+                interest: Interest::READABLE.add(Interest::WRITABLE),
+                token: retrieved_token,
             })
             .collect();
-
-        /*
-        // Transform the items in the register into WASI subscriptions.
-        let mut wasi_subscriptions = Vec::new();
-
-        for (
-            _,
-            RegisteredFd {
-                fd,
-                token,
-                interests,
-                ..
-            },
-        ) in register.iter()
-        {
-            wasi_subscriptions.push(__wasi_subscription_t {
-                userdata: Into::<usize>::into(*token) as u64,
-                type_: if interests.is_readable() {
-                    __WASI_EVENTTYPE_FD_READ
-                } else if interests.is_writable() {
-                    __WASI_EVENTTYPE_FD_WRITE
-                } else {
-                    return Err(io_err!(format!(
-                        "Interest for file descriptor `{}` and token `{:?}` is not supported",
-                        fd, token
-                    )));
-                },
-                u: __wasi_subscription_u {
-                    fd_readwrite: __wasi_subscription_fs_readwrite_t { fd: *fd },
-                },
-            });
-        }
-
-        // Prepare empty events to be filled by `poll_oneoff`.
-        let mut wasi_events = vec![
-            __wasi_event_t {
-                userdata: 0,
-                error: 0,
-                type_: 0,
-                u: __wasi_event_u {
-                    fd_readwrite: __wasi_event_fd_readwrite_t {
-                        nbytes: 0,
-                        flags: 0,
-                    }
-                }
-            };
-            wasi_subscriptions.len()
-        ];
-
-        let mut wasi_events_len: u32 = 0;
-
-        // Let's call the `poll_oneoff` syscall.
-        let result = unsafe {
-            poll_oneoff(
-                wasi_subscriptions.as_ptr(),
-                wasi_events.as_mut_ptr(),
-                wasi_subscriptions.len() as u32,
-                &mut wasi_events_len as *mut _,
-            )
-        };
-
-        if result != __WASI_ESUCCESS {
-            return Err(io_err!(format!(
-                "Calling `poll_oneoff` returned `{}` (i.e. not a success)",
-                result
-            )));
-        }
-
-        if wasi_events_len != wasi_events.len() as u32 {
-            return Err(io_err!(format!(
-                "Unexpected number of events (expected `{}`, received `{}`)",
-                wasi_events.len(),
-                wasi_events_len
-            )));
-        }
-
-        *events = wasi_events
-            .iter()
-            .filter(|wasi_event| wasi_event.error == __WASI_ESUCCESS)
-            .map(|wasi_event| {
-                dbg!(wasi_event);
-
-                Ok(Event {
-                    wasi_errno: wasi_event.error,
-                    interest: {
-                        let mut readable = None;
-                        let mut writable = None;
-
-                        if (wasi_event.type_ & __WASI_EVENTTYPE_FD_READ) != 0 {
-                            readable = Some(Interest::READABLE);
-                        }
-
-                        if (wasi_event.type_ & __WASI_EVENTTYPE_FD_WRITE) != 0 {
-                            writable = Some(Interest::WRITABLE);
-                        }
-
-                        match (readable, writable) {
-                            (Some(readable), None) => readable,
-                            (None, Some(writable)) => writable,
-                            (Some(readable), Some(writable)) => readable.add(writable),
-                            (None, None) => {
-                                return Err(io_err!(
-                                    "Interests of `__wasi_event_t` (`{:?}`) seem invalid"
-                                ))
-                            }
-                        }
-                    },
-                    token: Token(
-                        wasi_event
-                            .userdata
-                            .try_into()
-                            .map_err(|e: TryFromIntError| io_err!(e.to_string()))?,
-                    ),
-                })
-            })
-            .collect::<io::Result<Events>>()?;
-        */
 
         Ok(())
     }
